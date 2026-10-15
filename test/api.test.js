@@ -1,0 +1,34 @@
+import {test} from 'node:test';
+import assert from 'node:assert/strict';
+import {spawn} from 'node:child_process';
+import 'dotenv/config';
+import {Pool} from 'pg';
+import {randomUUID} from 'node:crypto';
+
+test('API demo flow: authentication, ownership, calculated booking, public submission and transitions',async t=>{
+  assert.ok(process.env.DATABASE_URL,'DATABASE_URL is required for the PostgreSQL integration test');
+  const schema='sava_test_'+randomUUID().replaceAll('-',''),admin=new Pool({connectionString:process.env.DATABASE_URL,ssl:{rejectUnauthorized:false}}),port=31000+Math.floor(Math.random()*20000);
+  await admin.query(`CREATE SCHEMA "${schema}"`);
+  const url=new URL(process.env.DATABASE_URL);url.searchParams.set('options',`-c search_path=${schema}`);
+  const env={...process.env,DATABASE_URL:url.toString(),PORT:String(port),PUBLIC_BASE_URL:`http://localhost:${port}`};
+  const run=script=>new Promise((resolve,reject)=>{const child=spawn(process.execPath,[script],{env,stdio:'ignore'});child.on('error',reject);child.on('exit',code=>code===0?resolve():reject(Error(`${script} failed with exit ${code}`)))});
+  await run('src/migrate.js');await run('src/seed.js');
+  const server=spawn(process.execPath,['src/server.js'],{env,stdio:'ignore'});t.after(async()=>{server.kill();await admin.query(`DROP SCHEMA "${schema}" CASCADE`);await admin.end()});
+  const base=`http://127.0.0.1:${port}/api/v1`;let ready=false;for(let i=0;i<80;i++){try{const r=await fetch(base+'/openapi.json');if(r.ok){ready=true;break}}catch{}await new Promise(r=>setTimeout(r,100))}assert.ok(ready,'server starts');
+  let r=await fetch(base+'/auth/login',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({email:'marta@sava.ao',password:'SavaDemo2026!'})});assert.equal(r.status,200);const {accessToken}=await r.json(),auth={authorization:`Bearer ${accessToken}`,'content-type':'application/json'};
+  r=await fetch(base+'/properties',{headers:auth});assert.equal(r.status,200);const items=(await r.json()).items;assert.ok(items.length>=3);const propertyId=items[0].id;
+  r=await fetch(base+'/properties/99999999-9999-4999-8999-999999999999',{headers:auth});assert.equal(r.status,404);
+  r=await fetch(base+'/properties',{method:'POST',headers:auth,body:JSON.stringify({name:'PoC test home',type:'house',province:'Luanda',city:'Luanda',neighborhood:'Maianga',address:'',bedrooms:1,bathrooms:1,guestCapacity:2,areaSquareMeters:50,amenities:['Wi-Fi'],description:'Test listing',nightlyRate:12345,status:'draft'})});assert.equal(r.status,201);const createdProperty=await r.json();assert.equal(createdProperty.nightlyRate,12345);
+  r=await fetch(base+`/properties/${createdProperty.id}`,{method:'PATCH',headers:auth,body:JSON.stringify({nightlyRate:13000})});assert.equal(r.status,200);assert.equal((await r.json()).nightlyRate,13000);
+  const form=new FormData();form.append('file',new Blob(['not-a-real-image'],{type:'image/png'}),'test.png');r=await fetch(base+`/properties/${createdProperty.id}/photos`,{method:'POST',headers:{authorization:`Bearer ${accessToken}`},body:form});assert.equal(r.status,201);const photo=await r.json();
+  r=await fetch(base+`/properties/${createdProperty.id}/photos/order`,{method:'PATCH',headers:auth,body:JSON.stringify({photoIds:[photo.id]})});assert.equal(r.status,200);
+  r=await fetch(base+`/properties/${createdProperty.id}/photos/${photo.id}`,{method:'DELETE',headers:auth});assert.equal(r.status,200);
+  r=await fetch(base+'/reservations',{method:'POST',headers:auth,body:JSON.stringify({propertyId,guest:{name:'Test Guest',contact:'+244900000001'},checkIn:'2026-11-01',checkOut:'2026-11-04',guestCount:2,paymentMethod:'multicaixa_express'})});assert.equal(r.status,201);const reservation=await r.json();assert.equal(reservation.nightCount,3);assert.equal(reservation.totalAmount,reservation.nightlyRate*3);
+  r=await fetch(base+`/reservations/${reservation.id}/status`,{method:'PATCH',headers:auth,body:JSON.stringify({status:'checked_in'})});assert.equal(r.status,200);assert.equal((await r.json()).status,'checked_in');
+  r=await fetch(base+`/reservations/${reservation.id}/status`,{method:'PATCH',headers:auth,body:JSON.stringify({status:'pending'})});assert.equal(r.status,409);
+  r=await fetch(base+'/reservations',{method:'POST',headers:auth,body:JSON.stringify({propertyId,guest:{name:'Overlap Guest',contact:'+244900000009'},checkIn:'2026-11-02',checkOut:'2026-11-04',guestCount:2,paymentMethod:'multicaixa_express'})});assert.equal(r.status,409);
+  r=await fetch(base+'/reservations',{method:'POST',headers:auth,body:JSON.stringify({propertyId,guest:{name:'Invalid',contact:'+244900000002'},checkIn:'2026-11-01',checkOut:'2026-11-04',guestCount:2,paymentMethod:'invalid'})});assert.equal(r.status,400);
+  r=await fetch(base+'/booking-links',{method:'POST',headers:auth,body:JSON.stringify({propertyId,checkIn:'2026-12-01',checkOut:'2026-12-03',guestCount:2,channel:'whatsapp'})});assert.equal(r.status,201);const link=await r.json();assert.ok(link.token);
+  r=await fetch(base+`/public/booking-requests/${link.token}`);assert.equal(r.status,200);const pub=await r.json();assert.equal(pub.property.address,undefined);assert.equal(pub.partner,undefined);
+  r=await fetch(base+`/public/booking-requests/${link.token}/submit`,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({guest:{name:'Public Guest',contact:'+244900000003'},paymentMethod:'multicaixa_express'})});assert.equal(r.status,201);assert.equal((await r.json()).reservation.status,'pending');
+});

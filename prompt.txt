@@ -1,0 +1,289 @@
+Build the backend API for the Sava partner portal PoC.
+
+First inspect the existing API project, identify its language, framework, database, and conventions, then implement the API using those conventions. If the project is empty, choose a maintainable stack suitable for a small REST API. Include database models/migrations, validation, API documentation, seed data, and tests for the API. Keep the API separate from the Angular frontend; do not modify the frontend unless a small API client contract/document is useful.
+
+API conventions
+- Base path: /api/v1
+- JSON request and response bodies, except photo upload.
+- Use ISO 8601 timestamps and YYYY-MM-DD dates. Use Africa/Luanda for business date handling.
+- Currency is AOA, displayed as Kz in the frontend. Store monetary values as integer AOA amounts.
+- Use UUIDs for entity IDs.
+- Use consistent pagination: query parameters page (default 1) and pageSize (default 20); response includes { items, page, pageSize, total }.
+- Use consistent errors: { error: { code, message, details? } } with appropriate HTTP status codes.
+- Validate input and return useful field-level validation errors.
+- Protect partner endpoints with authentication and ensure each partner can access only their own data.
+- Do not trust client-supplied prices or totals. Calculate prices and totals on the server from the property rate and dates.
+- Use enums consistently in the API. Suggested reservation statuses: pending, confirmed, checked_in, completed, cancelled. Suggested listing statuses: published, draft. Suggested payment statuses: pending, processing, paid, failed, refunded.
+- Include seed/demo data corresponding to the existing PoC listings and reservations.
+
+Authentication
+1. POST /auth/login
+   Request:
+   {
+     "email": "marta@sava.ao",
+     "password": "..."
+   }
+   Response:
+   {
+     "accessToken": "...",
+     "tokenType": "Bearer",
+     "expiresIn": 3600,
+     "partner": { "id": "uuid", "name": "Marta Costa", "email": "marta@sava.ao" }
+   }
+
+2. POST /auth/logout
+   Auth required. Revoke the active session/token.
+   Response: { "success": true }
+
+3. GET /auth/me
+   Auth required.
+   Response:
+   {
+     "id": "uuid",
+     "name": "Marta Costa",
+     "email": "marta@sava.ao",
+     "language": "pt-AO"
+   }
+
+Dashboard
+4. GET /dashboard/summary?from=2026-10-01&to=2026-10-31
+   Response:
+   {
+     "period": { "from": "2026-10-01", "to": "2026-10-31" },
+     "revenue": { "amount": 4280000, "currency": "AOA", "changePercent": 12.8 },
+     "occupancyRate": 84.6,
+     "reservationCount": 41,
+     "averageRating": 4.93,
+     "reviewCount": 128,
+     "reservationCounts": {
+       "total": 41, "completed": 24, "upcoming": 12, "pending": 5
+     },
+     "recentReservations": [
+       {
+         "id": "uuid", "guestName": "João Manuel",
+         "propertyName": "Casa do Miradouro",
+         "checkIn": "2026-10-14", "checkOut": "2026-10-18",
+         "guestCount": 2, "totalAmount": 248000, "currency": "AOA",
+         "status": "confirmed"
+       }
+     ],
+     "propertyPerformance": [
+       {
+         "propertyId": "uuid", "name": "Casa do Miradouro",
+         "location": "Miramar, Luanda", "status": "published",
+         "rating": 4.92, "reviewCount": 48,
+         "occupancyRate": 92, "reservationCount": 18
+       }
+     ]
+   }
+
+Properties
+5. GET /properties?q=miradouro&status=published&page=1&pageSize=20
+   Response uses the standard pagination envelope. Each item:
+   {
+     "id": "uuid", "name": "Casa do Miradouro",
+     "type": "house", "province": "Luanda", "city": "Luanda",
+     "neighborhood": "Miramar", "address": "",
+     "bedrooms": 3, "bathrooms": 2, "guestCapacity": 6,
+     "areaSquareMeters": 180, "floor": null,
+     "amenities": ["Wi-Fi", "Piscina"],
+     "description": "...", "nightlyRate": 62000, "currency": "AOA",
+     "status": "published",
+     "photos": [{ "id": "uuid", "url": "...", "sortOrder": 0, "altText": null }],
+     "rating": 4.92, "reviewCount": 48,
+     "occupancyRate": 92, "reservationCount": 18,
+     "createdAt": "...", "updatedAt": "..."
+   }
+
+6. POST /properties
+   Request:
+   {
+     "name": "Apartamento da Baía",
+     "type": "apartment",
+     "province": "Luanda", "city": "Luanda",
+     "neighborhood": "Ilha de Luanda", "address": "",
+     "bedrooms": 2, "bathrooms": 2, "guestCapacity": 4,
+     "areaSquareMeters": 110, "floor": "4.º andar",
+     "amenities": ["Wi-Fi", "Ar condicionado"],
+     "description": "...", "nightlyRate": 105000,
+     "status": "draft"
+   }
+   Response: the complete property object described above.
+
+7. GET /properties/{propertyId}
+   Response: the complete property object.
+
+8. PATCH /properties/{propertyId}
+   Request: any editable subset of the POST fields, including status.
+   Response: the updated complete property object.
+
+9. POST /properties/{propertyId}/photos
+   Auth required; multipart/form-data with `file` (image) and optional `altText`, `sortOrder`.
+   Response:
+   { "id": "uuid", "url": "...", "altText": null, "sortOrder": 0 }
+
+10. PATCH /properties/{propertyId}/photos/order
+    Request: { "photoIds": ["uuid", "uuid"] }
+    Response: { "photos": [{ "id": "uuid", "url": "...", "sortOrder": 0 }] }
+
+11. DELETE /properties/{propertyId}/photos/{photoId}
+    Response: { "success": true }
+
+Reservations
+12. GET /reservations?q=joao&status=pending&from=2026-10-01&to=2026-10-31&page=1&pageSize=20
+    Response uses the standard pagination envelope. Each item:
+    {
+      "id": "uuid", "reference": "RSV-2026-1042",
+      "propertyId": "uuid", "propertyName": "Casa do Miradouro",
+      "guest": { "id": "uuid", "name": "João Manuel", "contact": "+244 923 456 789" },
+      "checkIn": "2026-10-14", "checkOut": "2026-10-18",
+      "guestCount": 2, "nightCount": 4,
+      "nightlyRate": 62000, "totalAmount": 248000, "currency": "AOA",
+      "paymentMethod": "multicaixa_express",
+      "invoiceRequested": false, "channel": "in_person",
+      "status": "confirmed", "createdAt": "...", "updatedAt": "..."
+    }
+
+13. POST /reservations
+    For a reservation entered by the partner.
+    Request:
+    {
+      "propertyId": "uuid",
+      "guest": { "name": "João Manuel", "contact": "+244 923 456 789" },
+      "checkIn": "2026-10-14", "checkOut": "2026-10-18",
+      "guestCount": 2,
+      "paymentMethod": "multicaixa_express",
+      "invoiceRequested": false,
+      "channel": "in_person"
+    }
+    Response: the complete reservation object. Validate dates, property capacity, and availability; calculate nightCount and totalAmount on the server.
+
+14. GET /reservations/{reservationId}
+    Response: the complete reservation object, with guest, property, and payment summary details.
+
+15. PATCH /reservations/{reservationId}/status
+    Request:
+    { "status": "checked_in", "cancellationReason": null }
+    `cancellationReason` is optional and used when status is `cancelled`.
+    Response: updated reservation object.
+
+Booking links and public booking requests
+16. POST /booking-links
+    Auth required. Create a shareable link for a property and date range.
+    Request:
+    {
+      "propertyId": "uuid",
+      "checkIn": "2026-10-14", "checkOut": "2026-10-18",
+      "guestCount": 2, "channel": "whatsapp",
+      "guestContact": "+244 923 456 789"
+    }
+    Response:
+    {
+      "id": "uuid", "token": "...", "url": "https://.../booking/request/...",
+      "propertyId": "uuid", "propertyName": "Casa do Miradouro",
+      "checkIn": "2026-10-14", "checkOut": "2026-10-18",
+      "guestCount": 2, "nightlyRate": 62000,
+      "estimatedTotal": 248000, "currency": "AOA",
+      "paymentOptions": ["multicaixa_express", "multicaixa_reference"],
+      "status": "active", "expiresAt": "..."
+    }
+
+17. GET /public/booking-requests/{token}
+    Public; no partner authentication.
+    Response contains the shareable property and stay details, estimated total, and accepted payment options. Do not expose private property address or partner data.
+
+18. POST /public/booking-requests/{token}/submit
+    Public; no partner authentication.
+    Request:
+    {
+      "guest": { "name": "João Manuel", "contact": "+244 923 456 789" },
+      "paymentMethod": "multicaixa_express",
+      "invoiceRequested": false
+    }
+    Response:
+    {
+      "reservation": { "...": "reservation object", "status": "pending" },
+      "message": "Pedido de reserva enviado."
+    }
+    Validate link state/expiry, payment method, capacity, availability, and guest fields.
+
+Guests
+19. GET /guests?q=ana&page=1&pageSize=20
+    Response uses the standard pagination envelope. Each item:
+    {
+      "id": "uuid", "name": "Ana Martins", "contact": "+244 923 456 789",
+      "reservationCount": 2, "lastStayDate": "2026-10-16",
+      "createdAt": "...",
+      "recentReservations": [
+        {
+          "id": "uuid", "propertyName": "Residência Baía Azul",
+          "checkIn": "2026-10-16", "checkOut": "2026-10-20",
+          "totalAmount": 420000, "currency": "AOA", "status": "checked_in"
+        }
+      ]
+    }
+
+20. GET /guests/{guestId}
+    Response: the guest object above, including full reservation history (paginated if needed).
+
+Payments
+21. GET /payments?status=processing&from=2026-10-01&to=2026-10-31&page=1&pageSize=20
+    Response uses the standard pagination envelope. Each item:
+    {
+      "id": "uuid", "reference": "PAY-2026-1042",
+      "reservationId": "uuid", "guestName": "Ana Martins",
+      "propertyName": "Residência Baía Azul",
+      "date": "...", "amount": 420000, "currency": "AOA",
+      "method": "multicaixa_reference",
+      "status": "processing"
+    }
+
+Analytics
+22. GET /analytics/summary?from=2026-10-01&to=2026-10-31
+    Response:
+    {
+      "period": { "from": "2026-10-01", "to": "2026-10-31" },
+      "revenue": { "total": 4280000, "changePercent": 12.8, "currency": "AOA" },
+      "occupancyRate": 84.6,
+      "reservationCount": 41,
+      "averageRating": 4.93,
+      "revenueByMonth": [{ "month": "2026-10", "amount": 4280000 }],
+      "reservationsByStatus": [
+        { "status": "confirmed", "count": 12 },
+        { "status": "pending", "count": 5 }
+      ],
+      "propertyPerformance": [
+        { "propertyId": "uuid", "name": "Casa do Miradouro",
+          "revenue": 1116000, "reservationCount": 18, "occupancyRate": 92 }
+      ]
+    }
+
+Settings
+23. GET /settings
+    Response:
+    {
+      "name": "Marta Costa", "email": "marta@sava.ao",
+      "language": "pt-AO",
+      "bookingNotifications": true, "paymentNotifications": true
+    }
+
+24. PATCH /settings
+    Request: any editable subset of:
+    {
+      "name": "Marta Costa", "email": "marta@sava.ao",
+      "language": "pt-AO",
+      "bookingNotifications": true, "paymentNotifications": true
+    }
+    Response: the complete updated settings object.
+
+Implementation expectations
+- Implement all endpoints above, including the public booking-link flow.
+- Create relational models for partners, properties, property photos, guests, reservations, booking links, payments, and settings.
+- Add indexes for common filters such as partnerId, status, checkIn, checkOut, and guest/property relationships.
+- Enforce ownership and authorization on every partner-scoped endpoint.
+- Do not expose partner-private data from public booking endpoints.
+- Keep payment integration out of scope; record payment preferences/status only, and clearly mark payment records as demo data unless a real provider is configured.
+- Add OpenAPI/Swagger documentation with request/response schemas and enums.
+- Seed the demo data needed to exercise the frontend.
+- Add tests for authentication, validation, ownership, CRUD, status transitions, date/price calculation, photo handling, and public booking submission.
+- At completion, report how to run the API, apply migrations, seed data, view API docs, and run tests. Include any assumptions or incomplete integrations.
