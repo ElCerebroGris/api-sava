@@ -6,6 +6,16 @@ import multer from "multer";
 import { API, enums, fail } from "./lib/shared.js";
 
 const app = express();
+// Allow browser clients from any origin to call the API, including preflight
+// requests for JSON and bearer-token authenticated requests.
+app.use((req, res, next) => {
+  res.setHeader("Access-Control-Allow-Origin", "*");
+  res.setHeader("Access-Control-Allow-Methods", "GET, POST, PATCH, DELETE, OPTIONS");
+  res.setHeader("Access-Control-Allow-Headers", "Authorization, Content-Type");
+
+  if (req.method === "OPTIONS") return res.sendStatus(204);
+  next();
+});
 app.use(express.json({ limit: "1mb" }));
 app.use("/uploads", express.static("uploads"));
 
